@@ -501,6 +501,8 @@ export default function Home() {
 		});
 	}, [identityLoading, fingerprintId, clerkId]);
 
+	const [creatingVoice, setCreatingVoice] = useState(false);
+
 	const createRoom = async () => {
 		setCreating(true);
 		try {
@@ -517,6 +519,25 @@ export default function Home() {
 			notify("error", { title: "Failed to create room" });
 		} finally {
 			setCreating(false);
+		}
+	};
+
+	const createVoiceRecorder = async () => {
+		setCreatingVoice(true);
+		try {
+			const res = await fetch("/api/recorder/create", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ fingerprintId }),
+			});
+			if (!res.ok) throw new Error("Failed to create recording session");
+			const { sessionId, ownerSecret } = await res.json();
+			sessionStorage.setItem(`ownerSecret:${sessionId}`, ownerSecret);
+			router.push(`/recorder/${sessionId}`);
+		} catch {
+			notify("error", { title: "Failed to create recording session" });
+		} finally {
+			setCreatingVoice(false);
 		}
 	};
 
@@ -573,12 +594,22 @@ export default function Home() {
 						>
 							<Button
 								onClick={createRoom}
-								disabled={creating}
+								disabled={creating || creatingVoice}
 								className="h-12 px-6 text-base font-medium rounded-lg"
 							>
 								{creating
 									? "Creating..."
 									: "Start meeting"}
+							</Button>
+							<Button
+								onClick={createVoiceRecorder}
+								disabled={creating || creatingVoice}
+								variant="outline"
+								className="h-12 px-6 text-base font-medium rounded-lg border-[#ffba8f]/30 hover:border-[#ffba8f] text-zinc-100 hover:text-white"
+							>
+								{creatingVoice
+									? "Creating..."
+									: "Voice Recorder"}
 							</Button>
 							{isSignedIn && (
 								<Button

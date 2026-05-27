@@ -11,6 +11,7 @@ import {
 	Settings,
 	Sparkles,
 	Users,
+	Mic,
 } from "lucide-react";
 import { ScheduleMeetingDialog } from "@/components/schedule-meeting-dialog";
 import { prefetchSummary } from "@/lib/summary-cache";
@@ -79,6 +80,18 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 		router.push(`/${id}`);
 	};
 
+	const createVoiceRecorder = async () => {
+		const res = await fetch("/api/recorder/create", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ fingerprintId }),
+		});
+		if (!res.ok) return;
+		const { sessionId, ownerSecret } = await res.json();
+		sessionStorage.setItem(`ownerSecret:${sessionId}`, ownerSecret);
+		router.push(`/recorder/${sessionId}`);
+	};
+
 	// Extract current summary room from pathname
 	const summaryMatch = pathname.match(/^\/summary\/(.+)$/);
 	const activeRoomName = summaryMatch?.[1] ?? null;
@@ -101,15 +114,26 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 					</SidebarMenuItem>
 				</SidebarMenu>
 				<SidebarMenu>
-					<SidebarMenuItem>
-						<SidebarMenuButton
-							onClick={createRoom}
-							className="bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
-						>
-							<Plus className="size-4" />
-							<span>New meeting</span>
-						</SidebarMenuButton>
-					</SidebarMenuItem>
+					<div className="grid grid-cols-2 gap-1.5 px-2 py-1">
+						<SidebarMenuItem className="w-full list-none">
+							<SidebarMenuButton
+								onClick={createRoom}
+								className="w-full bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground flex justify-center gap-1.5"
+							>
+								<Plus className="size-4" />
+								<span>Meeting</span>
+							</SidebarMenuButton>
+						</SidebarMenuItem>
+						<SidebarMenuItem className="w-full list-none">
+							<SidebarMenuButton
+								onClick={createVoiceRecorder}
+								className="w-full border border-border bg-background hover:bg-accent flex justify-center gap-1.5"
+							>
+								<Mic className="size-4 text-[#ffba8f]" />
+								<span>Record</span>
+							</SidebarMenuButton>
+						</SidebarMenuItem>
+					</div>
 					{isAuthenticated && (
 						<SidebarMenuItem>
 							<SidebarMenuButton
