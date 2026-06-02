@@ -1,9 +1,18 @@
 import Redis from "ioredis";
+import { Redis as UpstashRedis } from "@upstash/redis";
 
 const redisUrl = process.env.REDIS_URL;
+const upstashRestUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+const upstashRestToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 
 // Create Redis client optimized for serverless environments (Vercel)
-export const redis = redisUrl
+// Use Upstash HTTP REST client if available (solves TCP limits, EPIPE, and WRONGPASS errors on Vercel)
+export const redis = (upstashRestUrl && upstashRestToken)
+	? new UpstashRedis({
+			url: upstashRestUrl,
+			token: upstashRestToken,
+	  }) as any // Cast to any to unify pipeline types
+	: redisUrl
 	? new Redis(redisUrl, {
 			family: 0,
 			maxRetriesPerRequest: null, 
