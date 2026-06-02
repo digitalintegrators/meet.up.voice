@@ -5,21 +5,18 @@ const redisUrl = process.env.REDIS_URL;
 // Create Redis client optimized for serverless environments (Vercel)
 export const redis = redisUrl
 	? new Redis(redisUrl, {
-			// Instead of 0 (which triggers error immediately on temporary drop),
-			// we allow a fallback retry strategy that prevents crashing.
 			maxRetriesPerRequest: null, 
 			connectTimeout: 10000,
-			// Disabling keepAlive prevents socket closure EPIPE issues on lambda freezing
+			commandTimeout: 5000,
 			keepAlive: 0,
-			// Allow queueing commands while reconnecting
 			enableOfflineQueue: true,
-			// Reconnect attempt backoff strategy
 			retryStrategy(times) {
 				const delay = Math.min(times * 100, 3000);
 				return delay;
 			},
-			// Enable TLS/SSL explicitly if using rediss://
-			tls: redisUrl.startsWith("rediss:") ? { rejectUnauthorized: false } : undefined,
+			// Upstash rediss:// connections require passing an empty tls object {} 
+			// to enable TLS/SSL negotiations properly.
+			tls: redisUrl.startsWith("rediss:") ? {} : undefined,
 	  })
 	: new Redis({
 			lazyConnect: true,
@@ -31,6 +28,7 @@ export const redis = redisUrl
 redis.on("error", (err) => {
 	console.warn("ioredis background error:", err.message);
 });
+
 
 
 
