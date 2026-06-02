@@ -5,6 +5,7 @@ const redisUrl = process.env.REDIS_URL;
 // Create Redis client optimized for serverless environments (Vercel)
 export const redis = redisUrl
 	? new Redis(redisUrl, {
+			family: 0,
 			maxRetriesPerRequest: null, 
 			connectTimeout: 10000,
 			commandTimeout: 5000,
@@ -14,11 +15,11 @@ export const redis = redisUrl
 				const delay = Math.min(times * 100, 3000);
 				return delay;
 			},
-			// Upstash rediss:// connections require passing an empty tls object {} 
-			// to enable TLS/SSL negotiations properly.
-			tls: redisUrl.startsWith("rediss:") ? {} : undefined,
+			// Upstash / Vercel rediss:// connections require TLS
+			tls: (redisUrl.startsWith("rediss:") || redisUrl.includes("upstash") || process.env.NODE_ENV === "production") ? { rejectUnauthorized: false } : undefined,
 	  })
 	: new Redis({
+			family: 0,
 			lazyConnect: true,
 			maxRetriesPerRequest: null,
 			connectTimeout: 5000,
