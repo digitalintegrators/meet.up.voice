@@ -23,6 +23,10 @@ export interface AudioMixerState {
 	hasMic: boolean;
 	hasSystem: boolean;
 	error: string | null;
+	/** Locally recorded mixed audio blob ready for download/export */
+	recordedBlob: Blob | null;
+	/** Helper to trigger download of the locally recorded audio */
+	downloadAudio: (filename?: string) => void;
 	start: () => Promise<void>;
 	stop: () => void;
 }
@@ -38,12 +42,13 @@ function getAudioContext(): AudioContext {
 
 /**
  * Creates a AnalyserNode for a source track and polls it for RMS level.
- * Returns a cleanup function.
+ * Optionally ducking a target GainNode when voice activity exceeds threshold.
  */
 function attachLevelMeter(
 	ctx: AudioContext,
 	track: MediaStreamTrack,
 	onLevel: (rms: number) => void,
+	duckingTarget?: GainNode | null,
 ): () => void {
 	const stream = new MediaStream([track]);
 	const source = ctx.createMediaStreamSource(stream);
@@ -59,7 +64,20 @@ function attachLevelMeter(
 		let sum = 0;
 		for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
 		const rms = Math.sqrt(sum / data.length);
-		onLevel(Math.min(rms * 5, 1)); // amplify slightly and clamp
+		const level = Math.min(rms * 5, 1); // amplify slightly and clamp
+		onLevel(level);
+
+		// ── Meetily RMS Ducking Algorithm ──────────────────────────────────
+		// When microphone level exceeds speech threshold (> 0.08), attenuate
+		// system audio gain smoothly to 35% so user voice remains intelligible.
+		if (duckingTarget && ctx.state === "running") {
+			if (level > 0.08) {
+				duckingTarget.gain.setTargetAtTime(0.35, ctx.currentTime, 0.05);
+			} else {
+				duckingTarget.gain.setTargetAtTime(1.0, ctx.currentTime, 0.15);
+			}
+		}
+
 		rafId = requestAnimationFrame(tick);
 	};
 	rafId = requestAnimationFrame(tick);
@@ -74,8 +92,9 @@ function attachLevelMeter(
  * useAudioMixer
  *
  * Requests microphone and/or system audio (via getDisplayMedia with
- * audio-only), merges them into a single AudioContext destination, and
- * exposes the combined stream for use with ElevenLabs Scribe.
+ * audio-only), merges them into a single AudioContext destination with
+ * professional RMS ducking, records locally via MediaRecorder, and
+ * exposes the combined stream for ElevenLabs Scribe.
  */
 export function useAudioMixer({
 	source = "both",
@@ -86,10 +105,14 @@ export function useAudioMixer({
 	const [hasMic, setHasMic] = useState(false);
 	const [hasSystem, setHasSystem] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
 
-	// Hold refs to cleanup callbacks
+	// Hold refs to cleanup callbacks and media recorder
 	const cleanupRef = useRef<(() => void)[]>([]);
 	const onLevelsRef = useRef(onLevels);
+	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+	const audioChunksRef = useRef<Blob[]>([]);
+
 	useEffect(() => {
 		onLevelsRef.current = onLevels;
 	}, [onLevels]);
@@ -97,6 +120,10 @@ export function useAudioMixer({
 	const stop = useCallback(() => {
 		for (const fn of cleanupRef.current) fn();
 		cleanupRef.current = [];
+
+		if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+			mediaRecorderRef.current.stop();
+		}
 
 		if (stream) {
 			for (const t of stream.getTracks()) t.stop();
@@ -108,13 +135,31 @@ export function useAudioMixer({
 		setError(null);
 	}, [stream]);
 
+	const downloadAudio = useCallback((filename = "meeting-recording.webm") => {
+		if (!recordedBlob) return;
+		const url = URL.createObjectURL(recordedBlob);
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = filename;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+	}, [recordedBlob]);
+
 	const start = useCallback(async () => {
 		setError(null);
+		setRecordedBlob(null);
+		audioChunksRef.current = [];
+
 		try {
 			const ctx = getAudioContext();
 			if (ctx.state === "suspended") await ctx.resume();
 
 			const dest = ctx.createMediaStreamDestination();
+			const sysGainNode = ctx.createGain();
+			sysGainNode.gain.value = 1.0;
+			sysGainNode.connect(dest);
 
 			let micTrack: MediaStreamTrack | null = null;
 			let sysTrack: MediaStreamTrack | null = null;
@@ -138,10 +183,10 @@ export function useAudioMixer({
 						src.connect(dest);
 						setHasMic(true);
 
-						// Level meter for mic
+						// Level meter for mic with system audio ducking target
 						const cleanup = attachLevelMeter(ctx, micTrack, (rms) => {
 							onLevelsRef.current?.({ mic: rms, system: 0 });
-						});
+						}, sysGainNode);
 						cleanupRef.current.push(cleanup);
 						cleanupRef.current.push(() => micTrack?.stop());
 					}
@@ -153,9 +198,6 @@ export function useAudioMixer({
 			// ── System / tab audio ───────────────────────────────────────────
 			if (source === "system" || source === "both") {
 				try {
-					// getDisplayMedia prompts the user to share a window or tab.
-					// They MUST check "Share audio" / "Share tab audio" for system
-					// audio to be included.
 					const displayStream = await navigator.mediaDevices.getDisplayMedia({
 						video: true, // must include video to trigger the share picker
 						audio: {
@@ -175,7 +217,8 @@ export function useAudioMixer({
 						const src = ctx.createMediaStreamSource(
 							new MediaStream([sysTrack]),
 						);
-						src.connect(dest);
+						// Connect system audio through ducking GainNode
+						src.connect(sysGainNode);
 						setHasSystem(true);
 
 						// Level meter for system audio
@@ -195,7 +238,6 @@ export function useAudioMixer({
 						);
 					}
 				} catch (e) {
-					// User cancelled display picker — not a fatal error
 					console.warn("System audio not captured:", e);
 				}
 			}
@@ -204,6 +246,31 @@ export function useAudioMixer({
 				throw new Error(
 					"No audio sources could be captured. Please allow microphone access or select a window to share.",
 				);
+			}
+
+			// ── Meetily Local MediaRecorder Setup ─────────────────────────────
+			try {
+				const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+					? "audio/webm;codecs=opus"
+					: MediaRecorder.isTypeSupported("audio/mp4")
+					? "audio/mp4"
+					: "";
+				const recorder = new MediaRecorder(
+					dest.stream,
+					mimeType ? { mimeType } : undefined,
+				);
+				recorder.ondataavailable = (e) => {
+					if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
+				};
+				recorder.onstop = () => {
+					const finalType = recorder.mimeType || "audio/webm";
+					const blob = new Blob(audioChunksRef.current, { type: finalType });
+					setRecordedBlob(blob);
+				};
+				recorder.start(1000); // collect 1s chunks
+				mediaRecorderRef.current = recorder;
+			} catch (err) {
+				console.warn("Local MediaRecorder init warning:", err);
 			}
 
 			setStream(dest.stream);
@@ -220,8 +287,11 @@ export function useAudioMixer({
 		return () => {
 			for (const fn of cleanupRef.current) fn();
 			cleanupRef.current = [];
+			if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+				mediaRecorderRef.current.stop();
+			}
 		};
 	}, []);
 
-	return { stream, isCapturing, hasMic, hasSystem, error, start, stop };
+	return { stream, isCapturing, hasMic, hasSystem, error, recordedBlob, downloadAudio, start, stop };
 }

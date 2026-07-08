@@ -18,6 +18,8 @@ import {
 	Captions,
 	ChevronRight,
 	HelpCircle,
+	Download,
+	FileText,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -104,6 +106,21 @@ export default function RecorderPage() {
 		} catch (err) {
 			notify("error", { title: "Audio Capture Failed", description: String(err) });
 		}
+	};
+
+	const downloadMarkdown = () => {
+		if (transcript.length === 0) return;
+		const md = `# Meeting Transcript (${new Date().toLocaleDateString()})\n\n` +
+			transcript.map(t => `**[${new Date(t.timestamp).toLocaleTimeString()}] Speaker:** ${t.text}`).join("\n\n");
+		const blob = new Blob([md], { type: "text/markdown" });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = `meeting-transcript-${sessionId}.md`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
 	};
 
 	// Auto-connect Scribe once mixer starts capturing successfully
@@ -252,6 +269,37 @@ export default function RecorderPage() {
 							</Button>
 						)}
 					</div>
+
+					{/* ── Meetily Local Export (Offline Audio & Transcript) ──────── */}
+					{(mixer.recordedBlob || transcript.length > 0) && (
+						<div className="pt-2 flex flex-col gap-2 border-t border-zinc-800/60">
+							<span className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">
+								Local Export (Offline)
+							</span>
+							<div className="flex gap-2">
+								{mixer.recordedBlob && (
+									<Button
+										variant="outline"
+										onClick={() => mixer.downloadAudio(`meeting-audio-${sessionId}.webm`)}
+										className="w-full bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center gap-1.5 py-4 text-xs"
+									>
+										<Download className="h-3.5 w-3.5" />
+										Audio (.webm)
+									</Button>
+								)}
+								{transcript.length > 0 && (
+									<Button
+										variant="outline"
+										onClick={downloadMarkdown}
+										className="w-full bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center gap-1.5 py-4 text-xs"
+									>
+										<FileText className="h-3.5 w-3.5" />
+										Transcript (.md)
+									</Button>
+								)}
+							</div>
+						</div>
+					)}
 				</div>
 			</section>
 

@@ -28,10 +28,10 @@ class RedisEmailRepository implements EmailRepository {
 		const ids = await redis.smembers(`room-emails:${roomId}`);
 		if (ids.length === 0) return [];
 
-		const values = await redis.mget(ids.map((id) => `email:${id}`));
+		const values = await redis.mget(ids.map((id: string) => `email:${id}`));
 		return values
-			.filter((v): v is string => v !== null)
-			.map((v) => JSON.parse(v) as EmailRecord);
+			.filter((v: any): v is string => typeof v === "string" && v !== null)
+			.map((v: string) => JSON.parse(v) as EmailRecord);
 	}
 
 	async findById(id: string): Promise<EmailRecord | null> {

@@ -35,8 +35,8 @@ export const redis = (upstashRestUrl && upstashRestToken)
 	  });
 
 // Silence connection/write errors so they do not crash Server Actions or SSR builds
-redis.on("error", (err) => {
-	console.warn("ioredis background error:", err.message);
+redis.on("error", (err: any) => {
+	console.warn("ioredis background error:", err?.message || err);
 });
 
 

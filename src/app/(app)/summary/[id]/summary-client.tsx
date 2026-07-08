@@ -99,7 +99,15 @@ export function SummaryClient({
   const [linkCopied, setLinkCopied] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [done, setDone] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState("default");
   const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem(`meet_summary_template_${roomId}`);
+      if (saved) setSelectedTemplate(saved);
+    }
+  }, [roomId]);
 
   const date = new Date(meetingDate);
 
@@ -130,17 +138,26 @@ export function SummaryClient({
     return md;
   }, [title, summaryText, actionItems, artifacts, notes]);
 
-  const startStreaming = useCallback(async () => {
-    if (startedRef.current) return;
+  const startStreaming = useCallback(async (customTemplate?: string, forceRegenerate = false) => {
+    if (startedRef.current && !forceRegenerate) return;
     startedRef.current = true;
 
-    // Check in-memory cache first (instant if prefetched on hover)
-    const cached = getCachedSummary(roomId);
-    if (cached) {
-      setTitle(cached.title);
-      setSummaryText(cached.summary);
-      setDone(true);
-      return;
+    const templateToUse = customTemplate || selectedTemplate;
+
+    // Check in-memory cache first if not forcing regeneration
+    if (!forceRegenerate && templateToUse === "default") {
+      const cached = getCachedSummary(roomId);
+      if (cached) {
+        setTitle(cached.title);
+        setSummaryText(cached.summary);
+        setDone(true);
+        return;
+      }
+    }
+
+    if (forceRegenerate) {
+      setSummaryText("");
+      setDone(false);
     }
 
     setStreaming(true);
@@ -149,7 +166,7 @@ export function SummaryClient({
       const res = await fetch("/api/summary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomId }),
+        body: JSON.stringify({ roomId, template: templateToUse, forceRegenerate }),
       });
 
       if (!res.ok) {
@@ -165,7 +182,9 @@ export function SummaryClient({
         const t = data.title ?? "Meeting Summary";
         setTitle(t);
         setSummaryText(data.summary);
-        setCachedSummary(roomId, { title: t, summary: data.summary });
+        if (templateToUse === "default") {
+          setCachedSummary(roomId, { title: t, summary: data.summary });
+        }
         setStreaming(false);
         setDone(true);
         return;
@@ -195,7 +214,9 @@ export function SummaryClient({
       const finalTitle = headerTitle
         ? decodeURIComponent(headerTitle)
         : "Meeting Summary";
-      setCachedSummary(roomId, { title: finalTitle, summary: fullText });
+      if (templateToUse === "default") {
+        setCachedSummary(roomId, { title: finalTitle, summary: fullText });
+      }
 
       setStreaming(false);
       setDone(true);
@@ -203,16 +224,30 @@ export function SummaryClient({
       setStreaming(false);
       setDone(true);
     }
-  }, [roomId]);
+  }, [roomId, selectedTemplate]);
 
   useEffect(() => {
     startStreaming();
   }, [startStreaming]);
 
   return (
-    <div className="flex flex-1 flex-col items-center px-4 py-8">
-      <div className="w-full max-w-2xl space-y-6">
-        {/* Header */}
+    <div className="mx-auto max-w-4xl px-4 py-8 space-y-8">
+      {/* Header section */}
+      <div className="space-y-4 border-b border-border pb-6">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              AI Meeting Intelligence
+            </span>
+          </div>
+          {isPublic && (
+            <span className="text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 px-2.5 py-0.5 rounded-full">
+              Public Link Active
+            </span>
+          )}
+        </div>
+
         <div className="space-y-3">
           <h1 className="text-2xl font-bold tracking-tight min-h-[2rem]">
             {title || "\u00A0"}
@@ -232,17 +267,54 @@ export function SummaryClient({
             })}
           </p>
 
+          {/* ── Meetily AI Summary Template Selector ──────────────────────── */}
+          <div className="pt-2 space-y-2">
+            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+              Summary Structure (Meetily Templates):
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: "default", label: "⚡ Standard Summary" },
+                { id: "standup", label: "💻 Engineering Standup" },
+                { id: "executive", label: "👔 Executive Briefing" },
+                { id: "discovery", label: "🤝 Client Discovery" },
+                { id: "minutes", label: "📝 Detailed Minutes" },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => {
+                    setSelectedTemplate(t.id);
+                    if (typeof window !== "undefined") {
+                      localStorage.setItem(`meet_summary_template_${roomId}`, t.id);
+                    }
+                    startStreaming(t.id, true);
+                  }}
+                  disabled={streaming}
+                  className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors flex items-center gap-1.5 ${
+                    selectedTemplate === t.id
+                      ? "bg-[#ffba8f] text-zinc-950 border-[#ffba8f] font-semibold shadow-sm"
+                      : "bg-muted/50 hover:bg-muted text-foreground/80 border-border"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Copy all */}
           {done && summaryText && (
-            <CopyButton
-              text={buildFullMarkdown()}
-              label="Copy all as Markdown"
-              className="text-xs"
-            />
+            <div className="pt-2 flex items-center gap-2">
+              <CopyButton
+                text={buildFullMarkdown()}
+                label="Copy all as Markdown"
+                className="text-xs"
+              />
+            </div>
           )}
 
           {/* Quick stats */}
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-3 pt-2">
             {participantNames.length > 0 && (
               <div className="flex items-center gap-1.5 rounded-full bg-muted border border-border px-3 py-1 text-xs text-foreground/60">
                 <Users className="h-3 w-3" />

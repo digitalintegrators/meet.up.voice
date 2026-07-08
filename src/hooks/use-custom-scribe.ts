@@ -53,6 +53,7 @@ export function useCustomScribe({
 	const ctxRef = useRef<AudioContext | null>(null);
 	const processorRef = useRef<ScriptProcessorNode | null>(null);
 	const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+	const silenceFramesRef = useRef(0);
 	const onCommittedRef = useRef(onCommitted);
 	const onPartialRef = useRef(onPartial);
 
@@ -70,6 +71,7 @@ export function useCustomScribe({
 		sourceRef.current = null;
 		ctxRef.current?.close().catch(() => {});
 		ctxRef.current = null;
+		silenceFramesRef.current = 0;
 
 		if (wsRef.current) {
 			if (
@@ -95,6 +97,7 @@ export function useCustomScribe({
 
 		setError(null);
 		setIsConnecting(true);
+		silenceFramesRef.current = 0;
 
 		try {
 			// 1. Get a single-use token from our backend
@@ -130,6 +133,26 @@ export function useCustomScribe({
 				processor.onaudioprocess = (e) => {
 					if (ws.readyState !== WebSocket.OPEN) return;
 					const float32 = e.inputBuffer.getChannelData(0);
+
+					// ── Meetily VAD / Silence Gate ────────────────────────────────────
+					// Calculate RMS energy of the 4096-sample buffer (~256ms).
+					// If energy is below silence threshold (< 0.003), increment silence counter.
+					// If we've been in silence for > 6 frames (~1.5 seconds), skip sending
+					// to Scribe to save quota/tokens and prevent AI hallucinations during silences.
+					let sum = 0;
+					for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
+					const rms = Math.sqrt(sum / float32.length);
+
+					if (rms < 0.003) {
+						silenceFramesRef.current++;
+						if (silenceFramesRef.current > 6) {
+							return; // Skip silence block
+						}
+					} else {
+						// Voice / audio activity detected! Reset silence counter immediately.
+						silenceFramesRef.current = 0;
+					}
+
 					// Convert Float32 → PCM16 Int16Array
 					const pcm16 = new Int16Array(float32.length);
 					for (let i = 0; i < float32.length; i++) {
